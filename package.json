@@ -1,6 +1,6 @@
 {
   "name": "@relintio/react-agent",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Official React & React Native WAF protection agent SDK for Relintio.",
   "main": "dist/index.js",
   "module": "dist/index.esm.js",
