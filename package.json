@@ -1,0 +1,35 @@
+{
+  "name": "@relintio/react-agent",
+  "version": "0.1.0",
+  "description": "Official React & React Native WAF protection agent SDK for Relintio.",
+  "main": "dist/index.js",
+  "module": "dist/index.esm.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "tsc",
+    "prepublishOnly": "npm run build"
+  },
+  "keywords": [
+    "react",
+    "react-native",
+    "relintio",
+    "waf",
+    "security",
+    "interceptor",
+    "axios",
+    "fetch"
+  ],
+  "author": "Relintio Operations <operations@relintio.com>",
+  "license": "MIT",
+  "peerDependencies": {
+    "react": "^16.8.0 || ^17.0.0 || ^18.0.0 || ^19.0.0"
+  },
+  "devDependencies": {
+    "@types/react": "^18.0.0",
+    "typescript": "^5.0.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Relintio/relintio-react-agent.git"
+  }
+}
