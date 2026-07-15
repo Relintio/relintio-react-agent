@@ -1,10 +1,10 @@
-import React, { createContext, useContext, useState, useEffect } from 'react';
+import React, { createContext, useCallback, useContext, useEffect, useRef, useState } from 'react';
 import { RelintioConfig, RelintioState } from './types';
 
 interface RelintioContextType {
   config: RelintioConfig;
   state: RelintioState;
-  triggerChallenge: (url: string) => void;
+  triggerChallenge: (url: string) => Promise<void>;
   resolveChallenge: () => void;
 }
 
@@ -19,28 +19,85 @@ export const RelintioProvider: React.FC<{
     challengeUrl: null,
     resolvedCount: 0,
   });
+  const pendingChallenge = useRef<{
+    promise: Promise<void>;
+    resolve: () => void;
+    reject: (error: Error) => void;
+    timeoutId: number;
+  } | null>(null);
 
-  const triggerChallenge = (url: string) => {
+  const triggerChallenge = useCallback((url: string): Promise<void> => {
+    if (pendingChallenge.current) {
+      return pendingChallenge.current.promise;
+    }
+
+    let challengeUrl: string;
+    try {
+      const parsed = new URL(url, window.location.href);
+      if (!['http:', 'https:'].includes(parsed.protocol)) {
+        return Promise.reject(new Error('Unsupported challenge URL protocol'));
+      }
+      challengeUrl = parsed.toString();
+    } catch {
+      return Promise.reject(new Error('Invalid challenge URL'));
+    }
+
+    let resolvePromise!: () => void;
+    let rejectPromise!: (error: Error) => void;
+    const promise = new Promise<void>((resolve, reject) => {
+      resolvePromise = resolve;
+      rejectPromise = reject;
+    });
+    const timeoutMs = Math.max(10_000, config.challengeTimeoutMs ?? 120_000);
+    const timeoutId = window.setTimeout(() => {
+      const pending = pendingChallenge.current;
+      pendingChallenge.current = null;
+      setState((previous) => ({ ...previous, isChallenging: false, challengeUrl: null }));
+      pending?.reject(new Error('Relintio challenge timed out'));
+    }, timeoutMs);
+
+    pendingChallenge.current = {
+      promise,
+      resolve: resolvePromise,
+      reject: rejectPromise,
+      timeoutId,
+    };
     setState((prev) => ({
       ...prev,
       isChallenging: true,
-      challengeUrl: url,
+      challengeUrl,
     }));
-  };
 
-  const resolveChallenge = () => {
+    return promise;
+  }, [config.challengeTimeoutMs]);
+
+  const resolveChallenge = useCallback(() => {
+    const pending = pendingChallenge.current;
+    if (!pending) return;
+
+    window.clearTimeout(pending.timeoutId);
+    pendingChallenge.current = null;
     setState((prev) => ({
       ...prev,
       isChallenging: false,
       challengeUrl: null,
       resolvedCount: prev.resolvedCount + 1,
     }));
-  };
+    pending.resolve();
+  }, []);
+
+  useEffect(() => () => {
+    const pending = pendingChallenge.current;
+    if (!pending) return;
+    window.clearTimeout(pending.timeoutId);
+    pendingChallenge.current = null;
+    pending.reject(new Error('Relintio provider unmounted'));
+  }, []);
 
   // Safe default for API URL
   const enrichedConfig = {
     ...config,
-    apiUrl: config.apiUrl || 'https://api.relintio.com/api',
+    apiUrl: config.apiUrl || 'https://relintio.com/api',
   };
 
   return (
@@ -76,15 +133,22 @@ const RelintioChallengeModal: React.FC<{
   url: string;
   onResolve: () => void;
 }> = ({ url, onResolve }) => {
+  const iframeRef = useRef<HTMLIFrameElement>(null);
+
   useEffect(() => {
+    const expectedOrigin = new URL(url, window.location.href).origin;
     const handleMessage = (event: MessageEvent) => {
-      if (event.data === 'relintio_challenge_success') {
+      if (
+        event.origin === expectedOrigin
+        && event.source === iframeRef.current?.contentWindow
+        && event.data === 'relintio_challenge_success'
+      ) {
         onResolve();
       }
     };
     window.addEventListener('message', handleMessage);
     return () => window.removeEventListener('message', handleMessage);
-  }, [onResolve]);
+  }, [onResolve, url]);
 
   return (
     <div
@@ -133,7 +197,10 @@ const RelintioChallengeModal: React.FC<{
           </span>
         </div>
         <iframe
+          ref={iframeRef}
           src={url}
+          sandbox="allow-forms allow-scripts allow-same-origin"
+          referrerPolicy="no-referrer"
           style={{ width: '100%', height: '100%', border: 'none' }}
           title="Relintio WAF Security Challenge"
         />

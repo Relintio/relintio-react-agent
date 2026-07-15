@@ -2,6 +2,7 @@ export interface RelintioConfig {
   licenseKey: string;
   apiUrl?: string;
   fallbackUrl?: string;
+  challengeTimeoutMs?: number;
 }
 
 export interface RelintioState {

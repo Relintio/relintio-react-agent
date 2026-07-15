@@ -25,7 +25,7 @@ import { RelintioProvider } from '@relintio/react-agent';
 
 const relintioConfig = {
   licenseKey: 'YOUR_LICENSE_KEY',
-  apiUrl: 'https://api.relintio.com/api',
+  apiUrl: 'https://relintio.com/api',
 };
 
 export default function App() {

@@ -6,38 +6,30 @@ interface RelintioInterceptorOptions {
 }
 
 export const useRelintioInterceptor = (options: RelintioInterceptorOptions = {}) => {
-  const { state, triggerChallenge } = useRelintio();
+  const { triggerChallenge } = useRelintio();
 
   useEffect(() => {
     // 1. Intercept standard window.fetch calls
     const originalFetch = window.fetch;
-    window.fetch = async function (input, init) {
-      const response = await originalFetch(input, init);
+    const interceptedFetch: typeof window.fetch = async function (input, init) {
+      const request = new Request(input, init);
+      const response = await originalFetch(request.clone());
 
       if (response.status === 403) {
         const relintioAction = response.headers.get('X-Relintio-Action');
         const challengeUrl = response.headers.get('X-Relintio-Challenge-URL');
 
         if (relintioAction === 'challenge' && challengeUrl) {
-          triggerChallenge(challengeUrl);
-          
-          // Wait until challenge is resolved
-          await new Promise<void>((resolve) => {
-            const checkInterval = setInterval(() => {
-              if (!state.isChallenging) {
-                clearInterval(checkInterval);
-                resolve();
-              }
-            }, 100);
-          });
+          await triggerChallenge(challengeUrl);
 
           // Retry the request after successful resolution
-          return originalFetch(input, init);
+          return originalFetch(request.clone());
         }
       }
 
       return response;
     };
+    window.fetch = interceptedFetch;
 
     // 2. Intercept Axios calls if an instance is provided
     let axiosInterceptorId: number | null = null;
@@ -50,18 +42,9 @@ export const useRelintioInterceptor = (options: RelintioInterceptorOptions = {})
             const relintioAction = response.headers['x-relintio-action'];
             const challengeUrl = response.headers['x-relintio-challenge-url'];
 
-            if (relintioAction === 'challenge' && challengeUrl) {
-              triggerChallenge(challengeUrl);
-
-              // Wait until challenge is resolved
-              await new Promise<void>((resolve) => {
-                const checkInterval = setInterval(() => {
-                  if (!state.isChallenging) {
-                    clearInterval(checkInterval);
-                    resolve();
-                  }
-                }, 100);
-              });
+            if (relintioAction === 'challenge' && challengeUrl && !config.__relintioRetried) {
+              config.__relintioRetried = true;
+              await triggerChallenge(challengeUrl);
 
               // Retry the original request
               return options.axiosInstance(config);
@@ -74,10 +57,12 @@ export const useRelintioInterceptor = (options: RelintioInterceptorOptions = {})
 
     // Cleanup interceptors on unmount
     return () => {
-      window.fetch = originalFetch;
+      if (window.fetch === interceptedFetch) {
+        window.fetch = originalFetch;
+      }
       if (options.axiosInstance && axiosInterceptorId !== null) {
         options.axiosInstance.interceptors.response.eject(axiosInterceptorId);
       }
     };
-  }, [state.isChallenging, options.axiosInstance, triggerChallenge]);
+  }, [options.axiosInstance, triggerChallenge]);
 };
