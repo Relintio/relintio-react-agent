@@ -8,6 +8,15 @@ Official React client-side SDK for integrating the Relintio WAF challenge protoc
 npm install @relintio/react-agent
 ```
 
+## Dashboard Deployment Workflow
+
+1. Open **Dashboard → Deployment**, select **React**, and download the prepared starter.
+2. Move the generated public client settings into the matching build environment and mount `RelintioProvider` around the application.
+3. Register the request interceptor, build the application, and open a route that performs a protected backend request.
+4. Enter that public route in Relintio and select **Verify target**.
+
+The provider reports runtime kind `react` and its package version without blocking page rendering. Backend protection still belongs in the server-side SDK used by the API.
+
 ## Features
 
 - **Standard Fetch Interceptor:** Overrides `window.fetch` to catch `X-Relintio-Action: challenge` headers and pause/resume outgoing calls.
@@ -25,7 +34,7 @@ import { RelintioProvider } from '@relintio/react-agent';
 
 const relintioConfig = {
   licenseKey: 'YOUR_LICENSE_KEY',
-  apiUrl: 'https://relintio.com/api',
+  apiUrl: 'https://api.relintio.com/v1',
 };
 
 export default function App() {

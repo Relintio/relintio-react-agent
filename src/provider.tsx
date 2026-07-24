@@ -9,11 +9,13 @@ interface RelintioContextType {
 }
 
 const RelintioContext = createContext<RelintioContextType | undefined>(undefined);
+const AGENT_VERSION = '0.1.2';
 
 export const RelintioProvider: React.FC<{
   config: RelintioConfig;
   children: React.ReactNode;
 }> = ({ config, children }) => {
+  const apiUrl = config.apiUrl || 'https://api.relintio.com/v1';
   const [state, setState] = useState<RelintioState>({
     isChallenging: false,
     challengeUrl: null,
@@ -94,10 +96,35 @@ export const RelintioProvider: React.FC<{
     pending.reject(new Error('Relintio provider unmounted'));
   }, []);
 
+  useEffect(() => {
+    if (typeof window === 'undefined' || !config.licenseKey) return;
+
+    const controller = new AbortController();
+    const timeoutId = window.setTimeout(() => controller.abort(), 5000);
+    window.fetch(`${apiUrl.replace(/\/$/, '')}/agent/heartbeat`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        license_key: config.licenseKey,
+        domain: window.location.hostname,
+        agent_kind: 'react',
+        agent_version: AGENT_VERSION,
+        timestamp: Math.floor(Date.now() / 1000),
+      }),
+      keepalive: true,
+      signal: controller.signal,
+    }).catch(() => undefined).finally(() => window.clearTimeout(timeoutId));
+
+    return () => {
+      window.clearTimeout(timeoutId);
+      controller.abort();
+    };
+  }, [apiUrl, config.licenseKey]);
+
   // Safe default for API URL
   const enrichedConfig = {
     ...config,
-    apiUrl: config.apiUrl || 'https://relintio.com/api',
+    apiUrl,
   };
 
   return (
