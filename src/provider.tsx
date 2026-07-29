@@ -1,5 +1,10 @@
 import React, { createContext, useCallback, useContext, useEffect, useRef, useState } from 'react';
-import { RelintioConfig, RelintioState } from './types';
+import { RelintioConfig, RelintioState, RelintioVerdict } from './types';
+// Plain ES5 JavaScript, typed by collector.d.ts. Deliberately not ported to
+// TypeScript: it has to stay byte-identical to agents/shared/collector.js, or
+// this app and the challenge page compute different device identities for the
+// same machine and every visitor who passes a challenge is a stranger again.
+import * as collector from './collector';
 
 interface RelintioContextType {
   config: RelintioConfig;
@@ -9,7 +14,7 @@ interface RelintioContextType {
 }
 
 const RelintioContext = createContext<RelintioContextType | undefined>(undefined);
-const AGENT_VERSION = '0.1.2';
+const AGENT_VERSION = '2.0.0';
 
 export const RelintioProvider: React.FC<{
   config: RelintioConfig;
@@ -20,6 +25,7 @@ export const RelintioProvider: React.FC<{
     isChallenging: false,
     challengeUrl: null,
     resolvedCount: 0,
+    verdict: null,
   });
   const pendingChallenge = useRef<{
     promise: Promise<void>;
@@ -96,30 +102,74 @@ export const RelintioProvider: React.FC<{
     pending.reject(new Error('Relintio provider unmounted'));
   }, []);
 
+  // A licence key in a browser bundle is a security incident, not a
+  // configuration mistake to route around. Refusing to start is the point:
+  // failing loudly in the console beats quietly publishing the key that signs
+  // this customer's challenge passports.
+  const key = config.publishableKey;
+  const keyIsPublishable = typeof key === 'string' && key.indexOf('pk_') === 0;
+
   useEffect(() => {
-    if (typeof window === 'undefined' || !config.licenseKey) return;
+    if (!key || keyIsPublishable) return;
+    // eslint-disable-next-line no-console
+    console.error(
+      '[Relintio] Refusing to start: publishableKey must be a publishable key (pk_live_...). '
+      + 'A licence key must never be shipped in browser JavaScript. '
+      + 'Get a publishable key from Dashboard → Deployment → React.'
+    );
+  }, [key, keyIsPublishable]);
+
+  // There is no heartbeat call. A browser declaring itself online proves
+  // nothing when its key is public, so the server derives liveness from the
+  // decisions this actually asks for.
+  useEffect(() => {
+    if (typeof window === 'undefined' || !keyIsPublishable || !config.verifyOnMount) return;
 
     const controller = new AbortController();
     const timeoutId = window.setTimeout(() => controller.abort(), 5000);
-    window.fetch(`${apiUrl.replace(/\/$/, '')}/agent/heartbeat`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        license_key: config.licenseKey,
-        domain: window.location.hostname,
-        agent_kind: 'react',
-        agent_version: AGENT_VERSION,
-        timestamp: Math.floor(Date.now() / 1000),
-      }),
-      keepalive: true,
-      signal: controller.signal,
-    }).catch(() => undefined).finally(() => window.clearTimeout(timeoutId));
+    const behaviour = collector.watchBehaviour();
+    let cancelled = false;
+
+    collector.collect({ behaviour })
+      .then((payload) => window.fetch(`${apiUrl.replace(/\/$/, '')}/agent/decision`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Agent-Version': AGENT_VERSION },
+        body: JSON.stringify({
+          license_key: key,
+          domain: window.location.hostname,
+          path: window.location.pathname,
+          referrer: document.referrer || '',
+          return_url: window.location.href,
+          agent_kind: 'react',
+          agent_version: AGENT_VERSION,
+          up_token: new URLSearchParams(window.location.search || '').get('up_token') || '',
+          telemetry: payload.telemetry,
+          env: payload.env,
+        }),
+        signal: controller.signal,
+      }))
+      .then((response) => (response && response.ok ? response.json() : null))
+      .then((verdict: RelintioVerdict | null) => {
+        if (cancelled || !verdict) return;
+
+        setState((previous) => ({ ...previous, verdict }));
+
+        if (verdict.action === 'challenge' && verdict.challenge_url) {
+          triggerChallenge(verdict.challenge_url).catch(() => undefined);
+        }
+      })
+      // Fail open, always. An app that goes dark because the verdict service
+      // was briefly unreachable has done its users more harm than any bot.
+      .catch(() => undefined)
+      .finally(() => window.clearTimeout(timeoutId));
 
     return () => {
+      cancelled = true;
       window.clearTimeout(timeoutId);
       controller.abort();
     };
-  }, [apiUrl, config.licenseKey]);
+    // triggerChallenge is stable for the lifetime of a given timeout config.
+  }, [apiUrl, key, keyIsPublishable, config.verifyOnMount, triggerChallenge]);
 
   // Safe default for API URL
   const enrichedConfig = {
